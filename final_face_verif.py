@@ -1652,8 +1652,8 @@ def draw_face_landmarks(frame, landmarks, width, height, user_name):
     x_max, y_max = max(landmark_points, key=lambda p: p[0])[0], max(landmark_points, key=lambda p: p[1])[1]
     
     # 바운딩 박스에 패딩 추가
-    padding_x = int((x_max - x_min) * 0.2)  # 가로 방향으로 20% 패딩
-    padding_y = int((y_max - y_min) * 0.2)  # 세로 방향으로 20% 패딩
+    padding_x = int((x_max - x_min) * 0.1)  # 가로 방향으로 10% 패딩
+    padding_y = int((y_max - y_min) * 0.1)  # 세로 방향으로 10% 패딩
 
     x_min = max(0, x_min - padding_x)
     y_min = max(0, y_min - padding_y)
@@ -1692,7 +1692,7 @@ def yolo_process(img):
 # 서버로 객체 정보를 전송하고 응답을 받는 함수 수정
 def send_object_to_server(device_name):
     global received_gestures
-    url = 'Write Your URL'
+    url = 'http://192.168.0.77:8080/et/eyeTracking/getDevice'
 
     # 객체 이름을 한국어로 매핑
     device_name_mapping = {
@@ -1722,7 +1722,7 @@ def send_object_to_server(device_name):
 # 서버로 제스처를 전송하는 함수 수정 (POST 요청으로 변경)
 def send_gesture_to_server(gesture_name):
     try:
-        url = 'Write Your URL'  # 서버 주소에 맞게 변경하세요
+        url = 'http://192.168.0.77:8080/et/eyeTracking/getGesture'  # 서버 주소에 맞게 변경하세요
         data = {'gestureName': gesture_name}
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         response = requests.post(url, data=data, headers=headers, timeout=10)
@@ -1783,7 +1783,7 @@ def main():
             if face_recognized:
                 if face_detected_time is None:
                     face_detected_time = time.time()
-                elif time.time() - face_detected_time > 5:
+                elif time.time() - face_detected_time > 3:
                     mode = 'eye_tracking'
                     eye_tracking_start_time = time.time()
                     print(f"모드를 {mode}로 전환합니다.")
@@ -1803,14 +1803,14 @@ def main():
                 cropped_frame = frame[y:y + h, x:x + w]
                 predicted_x, predicted_y = predict_mouse_coordinates(cropped_frame)
                 cv2.circle(frame, (predicted_x, predicted_y), 5, (0, 0, 255), -1)
-                coord_text = f'Predicted Coordinates: ({predicted_x}, {predicted_y})'
+                coord_text = f'예측된 좌표: ({predicted_x}, {predicted_y})'
                 frame = draw_text_with_pillow(frame, coord_text, (10, 30), font_size=20)
                 
                 # 객체 감지 실행
                 # 'light' 모델로 감지 실행
                 results_light = model_light(frame)
-                # 'light'에 대한 감지 처리
-                light_detections = []
+                max_conf_light = None
+                best_det_light = None
                 for det in results_light.xyxy[0]:
                     x1, y1, x2, y2, conf, cls = det[:6]
                     label = model_light.names[int(cls)]
@@ -1823,21 +1823,16 @@ def main():
                             min_height_light <= height <= max_height_light and
                             aspect_ratio >= min_aspect_ratio_light
                         ):
-                            cv2.rectangle(
-                                frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 255, 255), 2
-                            )
-                            cv2.putText(
-                                frame, f"{label} {conf:.2f}", (int(x1), int(y1) - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
-                            )
-                            light_detections.append({
-                                'label': label,
-                                'bbox': (int(x1), int(y1), int(x2), int(y2))
-                            })
+                            if max_conf_light is None or conf > max_conf_light:
+                                max_conf_light = conf
+                                best_det_light = {
+                                    'label': label,
+                                    'bbox': (int(x1), int(y1), int(x2), int(y2))
+                                }
                 # 'fan' 모델로 감지 실행
                 results_fan = model_fan(frame)
-                # 'fan'에 대한 감지 처리
-                fan_detections = []
+                max_conf_fan = None
+                best_det_fan = None
                 for det in results_fan.xyxy[0]:
                     x1, y1, x2, y2, conf, cls = det[:6]
                     label = model_fan.names[int(cls)]
@@ -1850,19 +1845,34 @@ def main():
                             min_height_fan <= height <= max_height_fan and
                             aspect_ratio >= min_aspect_ratio_fan
                         ):
-                            cv2.rectangle(
-                                frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2
-                            )
-                            cv2.putText(
-                                frame, f"{label} {conf:.2f}", (int(x1), int(y1) - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
-                            )
-                            fan_detections.append({
-                                'label': label,
-                                'bbox': (int(x1), int(y1), int(x2), int(y2))
-                            })
-                # 감지 결과 합치기
-                detections = light_detections + fan_detections
+                            if max_conf_fan is None or conf > max_conf_fan:
+                                max_conf_fan = conf
+                                best_det_fan = {
+                                    'label': label,
+                                    'bbox': (int(x1), int(y1), int(x2), int(y2))
+                                }
+                # 최고 신뢰도 객체만 사용
+                detections = []
+                if best_det_light:
+                    x1, y1, x2, y2 = best_det_light['bbox']
+                    cv2.rectangle(
+                        frame, (x1, y1), (x2, y2), (255, 255, 255), 2
+                    )
+                    frame = draw_text_with_pillow(
+                        frame, f"{best_det_light['label']} {max_conf_light:.2f}", (x1, y1 - 30),
+                        font_size=20, color=(255, 255, 255)
+                    )
+                    detections.append(best_det_light)
+                if best_det_fan:
+                    x1, y1, x2, y2 = best_det_fan['bbox']
+                    cv2.rectangle(
+                        frame, (x1, y1), (x2, y2), (0, 255, 0), 2
+                    )
+                    frame = draw_text_with_pillow(
+                        frame, f"{best_det_fan['label']} {max_conf_fan:.2f}", (x1, y1 - 30),
+                        font_size=20, color=(0, 255, 0)
+                    )
+                    detections.append(best_det_fan)
                 
                 # 예측된 시선 지점이 어떤 객체 내에 있는지 확인
                 gaze_in_object = False
@@ -1876,8 +1886,8 @@ def main():
                             print(f"객체 '{label}'에 시선 시작")
                         else:
                             elapsed_time = time.time() - current_object['start_time']
-                            if elapsed_time > 0.5:
-                                print(f"객체 '{label}'를 0.5초 이상 바라봄. 서버로 전송 중...")
+                            if elapsed_time > 0.3:
+                                print(f"객체 '{label}'를 0.3초 이상 바라봄. 서버로 전송 중...")
                                 # 객체를 서버로 전송
                                 send_object_to_server(label)
                                 # 응답을 받은 후 'yolo_tracking' 모드로 전환
@@ -1987,10 +1997,10 @@ def main():
                 else:
                     iris_status = 'Center'
                 # 텍스트를 프레임 위에 그리기
-                cv2.putText(frame, f'Iris Direction: {iris_status}', (10, 40), cv2.FONT_HERSHEY_COMPLEX, 1, (30, 30, 30), 2)
+                frame = draw_text_with_pillow(frame, f'현재 보고 있는 방향: {iris_status}', (10, 40), font_size=20, color=(30, 30, 30))
             else:
                 iris_status = 'Blink'
-                cv2.putText(frame, f'Iris Direction: {iris_status}', (10, 40), cv2.FONT_HERSHEY_COMPLEX, 1, (30, 30, 30), 2)
+                frame = draw_text_with_pillow(frame, f'현재 보고 있는 방향: {iris_status}', (10, 40), font_size=20, color=(30, 30, 30))
 
             # 제스처 감지 및 서버로 전송
             if iris_status in ['Right', 'Left', 'Up']:
@@ -1999,7 +2009,7 @@ def main():
                         gesture_start_time = time.time()
                     else:
                         elapsed_time = time.time() - gesture_start_time
-                        if elapsed_time >= 3:
+                        if elapsed_time >= 2:
                             gesture_name = iris_status
                             if gesture_name in received_gestures:
                                 print(f"제스처 '{gesture_name}'를 {elapsed_time:.1f}초 동안 유지했습니다. 서버로 전송합니다.")
@@ -2022,7 +2032,7 @@ def main():
                     blink_start_time = time.time()
                 else:
                     blink_elapsed = time.time() - blink_start_time
-                    if blink_elapsed >= 3:
+                    if blink_elapsed >= 2:
                         if 'Blink' in received_gestures:
                             print("Blink 제스처 감지됨. 서버로 전송합니다.")
                             send_gesture_to_server('Blink')
